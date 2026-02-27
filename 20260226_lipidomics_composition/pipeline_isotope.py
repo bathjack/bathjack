@@ -10,6 +10,7 @@ Usage:
     python pipeline_isotope.py PI
     python pipeline_isotope.py PC
     python pipeline_isotope.py PI --experiment isotope
+    python pipeline_isotope.py PI --focus "PI(18:0_18:0)"
 """
 
 import sys
@@ -300,6 +301,112 @@ def plot_d35_incorporation(lipid_class, experiment, outdir,
     print(f"  Saved: {stem}.png")
 
 
+# ---- Figure 4: Focused species analysis ----
+def plot_species_focus(lipid_class, species_name, experiment, outdir,
+                       sheet=DEFAULT_SHEET):
+    """
+    特定の species に着目した focused figure。
+    Left : 全治療条件の mol% (lines per cell line, colored by group)
+    Right: 18:0-d35 由来の取り込み量（d35 mol%）
+    """
+    path = os.path.join(BASE_DATA, experiment, EXCEL_FILE)
+    df_raw = pd.read_excel(path, sheet_name=sheet)
+    df_raw = df_raw[df_raw["class"] == lipid_class].copy()
+
+    family = df_raw.drop_duplicates(
+        subset=["cellline", "treatment", "class", "FamilyKey"]
+    ).copy()
+    family["group"] = family["cellline"].apply(
+        lambda c: "Sensitive" if c in SENSITIVE else "Resistant"
+    )
+
+    sub = family[family["FamilyKey"] == species_name].copy()
+    if len(sub) == 0:
+        print(f"  [focus] '{species_name}' が見つかりません")
+        return
+
+    avail_trts    = [t for t in TREATMENTS if t in sub["treatment"].unique()]
+    d35_trts      = [t for t in ["18:0-d35", "18:0-d35+18:1-13C5"] if t in avail_trts]
+    cellline_order = [c for c in SENSITIVE + RESISTANT if c in sub["cellline"].unique()]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    # ---- Panel A: mol% across all treatments ----
+    ax = axes[0]
+    trt_x = {t: i for i, t in enumerate(avail_trts)}
+
+    for cl in cellline_order:
+        cl_sub = sub[sub["cellline"] == cl]
+        xs = [trt_x[t] for t in avail_trts if t in cl_sub["treatment"].values]
+        ys = [float(cl_sub.loc[cl_sub["treatment"] == t, "Family_percent_in_class"].iloc[0])
+              for t in avail_trts if t in cl_sub["treatment"].values]
+        color = GROUP_COLORS["Resistant"] if cl in RESISTANT else GROUP_COLORS["Sensitive"]
+        ax.plot(xs, ys, "o-", color=color, alpha=0.75,
+                markersize=8, linewidth=1.3)
+        # 最後の点にcell line名をアノテーション
+        ax.annotate(cl, xy=(xs[-1], ys[-1]),
+                    xytext=(5, 0), textcoords="offset points",
+                    fontsize=7.5, color=color, va="center")
+
+    ax.set_xticks(range(len(avail_trts)))
+    ax.set_xticklabels(avail_trts, rotation=25, ha="right", fontsize=9)
+    ax.set_ylabel(f"mol% of total {lipid_class}", fontsize=11)
+    ax.set_title(f"{species_name}\nComposition (all treatments)", fontsize=11)
+    ax.set_ylim(bottom=0)
+    ax.set_xlim(-0.3, len(avail_trts) - 0.3)
+
+    # ---- Panel B: d35 取り込み量 ----
+    ax = axes[1]
+    if d35_trts:
+        d35_x = {t: i for i, t in enumerate(d35_trts)}
+
+        for cl in cellline_order:
+            cl_sub = sub[sub["cellline"] == cl]
+            xs = [d35_x[t] for t in d35_trts if t in cl_sub["treatment"].values]
+            ys = [float(cl_sub.loc[cl_sub["treatment"] == t,
+                                    "d35_family_percent_in_class"].iloc[0])
+                  for t in d35_trts if t in cl_sub["treatment"].values]
+            color = GROUP_COLORS["Resistant"] if cl in RESISTANT else GROUP_COLORS["Sensitive"]
+            ax.plot(xs, ys, "o-", color=color, alpha=0.75,
+                    markersize=8, linewidth=1.3)
+            ax.annotate(cl, xy=(xs[-1], ys[-1]),
+                        xytext=(5, 0), textcoords="offset points",
+                        fontsize=7.5, color=color, va="center")
+
+        ax.set_xticks(range(len(d35_trts)))
+        ax.set_xticklabels(d35_trts, rotation=25, ha="right", fontsize=9)
+        ax.set_ylabel(f"18:0-d35 derived\n(mol% of total {lipid_class})", fontsize=11)
+        ax.set_title(f"{species_name}\n18:0-d35 incorporation", fontsize=11)
+        ax.set_ylim(bottom=0)
+        ax.set_xlim(-0.3, len(d35_trts) - 0.3)
+    else:
+        ax.set_visible(False)
+
+    # 凡例
+    handles = [
+        plt.Line2D([0], [0], marker="o", color=GROUP_COLORS["Sensitive"],
+                   label="Sensitive (n=6)", linewidth=1.3, markersize=8),
+        plt.Line2D([0], [0], marker="o", color=GROUP_COLORS["Resistant"],
+                   label="Resistant (n=2)", linewidth=1.3, markersize=8),
+    ]
+    fig.legend(handles=handles, loc="upper center", ncol=2,
+               fontsize=9, frameon=False, bbox_to_anchor=(0.5, 1.04))
+
+    fig.suptitle(
+        f"{lipid_class}: {species_name}  —  isotope experiment",
+        fontsize=12, y=1.08
+    )
+    plt.tight_layout()
+
+    sp_tag = (species_name.replace("(", "").replace(")", "")
+              .replace(":", "").replace("_", "-"))
+    stem = os.path.join(outdir, f"{lipid_class}_isotope_focus_{sp_tag}")
+    plt.savefig(stem + ".pdf", bbox_inches="tight")
+    plt.savefig(stem + ".png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {stem}.png")
+
+
 # ---------- メイン ----------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Isotope lipidomics pipeline")
@@ -309,27 +416,37 @@ if __name__ == "__main__":
                         help="実験名サブディレクトリ（デフォルト: isotope）")
     parser.add_argument("--sheet", default=DEFAULT_SHEET,
                         help=f"シート名（デフォルト: {DEFAULT_SHEET}）")
+    parser.add_argument("--focus",
+                        help="注目するspecies名（例: 'PI(18:0_18:0)'）。"
+                             "指定した場合はfocused figureのみ生成。")
     args = parser.parse_args()
 
     lipid_class = args.lipid_class
     experiment  = args.experiment
 
-    print(f"\n===== {lipid_class} 解析開始 [{experiment}] =====")
-
-    df     = load_data(lipid_class, experiment, args.sheet)
     outdir = out_dir(lipid_class, experiment)
 
-    avail_trts = df["treatment"].unique()
+    if args.focus:
+        # --focus 指定時: focused figure のみ生成
+        print(f"\n===== {lipid_class} focused: {args.focus} [{experiment}] =====")
+        plot_species_focus(lipid_class, args.focus, experiment, outdir, args.sheet)
+        print(f"\n===== 完了: 出力先 {outdir}/ =====\n")
+    else:
+        # 通常モード: 全図を生成
+        print(f"\n===== {lipid_class} 解析開始 [{experiment}] =====")
 
-    print("[1/3] Stacked bar charts (Resistant vs Sensitive) ...")
-    for trt in TREATMENTS:
-        if trt in avail_trts:
-            plot_stacked_bar(df, lipid_class, trt, outdir)
+        df = load_data(lipid_class, experiment, args.sheet)
+        avail_trts = df["treatment"].unique()
 
-    print("[2/3] Dot plot by cell line ...")
-    plot_dot_by_cellline(df, lipid_class, outdir)
+        print("[1/3] Stacked bar charts (Resistant vs Sensitive) ...")
+        for trt in TREATMENTS:
+            if trt in avail_trts:
+                plot_stacked_bar(df, lipid_class, trt, outdir)
 
-    print("[3/3] 18:0-d35 incorporation ...")
-    plot_d35_incorporation(lipid_class, experiment, outdir, args.sheet)
+        print("[2/3] Dot plot by cell line ...")
+        plot_dot_by_cellline(df, lipid_class, outdir)
 
-    print(f"\n===== 完了: 出力先 {outdir}/ =====\n")
+        print("[3/3] 18:0-d35 incorporation ...")
+        plot_d35_incorporation(lipid_class, experiment, outdir, args.sheet)
+
+        print(f"\n===== 完了: 出力先 {outdir}/ =====\n")
