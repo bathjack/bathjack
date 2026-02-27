@@ -525,8 +525,8 @@ def plot_rescue_unsaturation(df, lipid_class, outdir):
     """
     オレイン酸レスキューによる「不飽和度全体」の回復を可視化。
     各サンプルの mol% 加重平均二重結合数（weighted-mean DB）を3条件で比較。
-      Ctr → C18:0 で下がる → C18:0+C18:1 で回復する、を確認する。
-    Sensitive（赤○）と Resistant（青□）を1パネルに重ねて表示。
+    V 字 (Ctr → C18:0↓ → C18:0+C18:1↑) の有意性を Mann-Whitney で検定し、
+    図内にブラケットで表示。統計結果は CSV にも保存。
     """
     RESCUE_TRT = "C18:0+C18:1"
     TRT_ORDER  = ["Ctr", "C18:0", "C18:0+C18:1"]
@@ -539,14 +539,18 @@ def plot_rescue_unsaturation(df, lipid_class, outdir):
         print(f"  [{lipid_class}] '{RESCUE_TRT}' データなし — unsaturation スキップ")
         return
 
-    # 種名から二重結合数をパース: "PI(16:0_18:1)" → 0+1=1, "PC(18:0_20:4)" → 0+4=4
     def parse_db(name):
         return sum(int(m) for m in re.findall(r":(\d+)", str(name)))
 
+    def sig_label(p):
+        if np.isnan(p): return ""
+        if p < 0.001:   return "***"
+        if p < 0.01:    return "**"
+        if p < 0.05:    return "*"
+        return "ns"
+
     df = df.copy()
     df["db"] = df["species"].map(parse_db)
-
-    # サンプルごとの mol%-加重平均二重結合数
     df["pct_x_db"] = df["pct"] * df["db"]
     unsat = (df.groupby(["sample", "treatment", "group"])
                .agg(pct_sum=("pct", "sum"), pctdb_sum=("pct_x_db", "sum"))
@@ -554,8 +558,43 @@ def plot_rescue_unsaturation(df, lipid_class, outdir):
     unsat["weighted_db"] = unsat["pctdb_sum"] / unsat["pct_sum"]
     unsat = unsat[unsat["treatment"].isin(TRT_ORDER)]
 
+    # --- Mann-Whitney 検定 ---
+    # 比較ペア: (x1, x2, trt_a, trt_b)
+    PAIRS = [(0, 1, "Ctr", "C18:0"), (1, 2, "C18:0", RESCUE_TRT)]
+    stats_rows = []
+    bracket_info = {grp: [] for grp in GROUPS}
+
+    for grp in GROUPS:
+        sub = unsat[unsat["group"] == grp]
+        for x1, x2, ta, tb in PAIRS:
+            va = sub[sub["treatment"] == ta]["weighted_db"].values
+            vb = sub[sub["treatment"] == tb]["weighted_db"].values
+            if len(va) >= 3 and len(vb) >= 3:
+                _, p = mannwhitneyu(va, vb, alternative="two-sided")
+            else:
+                p = np.nan
+            stats_rows.append({
+                "group": grp, "comparison": f"{ta} vs {tb}",
+                "n1": len(va), "n2": len(vb), "p": p,
+                "mean1": va.mean() if len(va) else np.nan,
+                "mean2": vb.mean() if len(vb) else np.nan,
+            })
+            bracket_info[grp].append((x1, x2, p))
+
+    stats_df = pd.DataFrame(stats_rows)
+
+    # コンソール出力
+    print(f"\n  [{lipid_class}] Unsaturation stats (Mann-Whitney, two-sided):")
+    for _, row in stats_df.iterrows():
+        p_str = f"{row['p']:.4f}" if not np.isnan(row['p']) else "n/a"
+        print(f"    {row['group']:10s}  {row['comparison']:25s}  "
+              f"n={int(row['n1'])},{int(row['n2'])}  "
+              f"mean={row['mean1']:.3f}→{row['mean2']:.3f}  "
+              f"p={p_str}  {sig_label(row['p'])}")
+
+    # --- プロット ---
     rng = np.random.default_rng(42)
-    fig, ax = plt.subplots(figsize=(5, 4.5))
+    fig, ax = plt.subplots(figsize=(5, 5))
 
     for grp in GROUPS:
         style = GROUP_STYLE[grp]
@@ -585,6 +624,28 @@ def plot_rescue_unsaturation(df, lipid_class, outdir):
     ax.set_ylabel("Weighted-mean double bonds per molecule", fontsize=10)
     ax.set_title(f"{lipid_class}: Overall unsaturation\n(mol%-weighted double bond count)", fontsize=11)
     ax.legend(fontsize=10, frameon=False)
+    ax.set_ylim(bottom=0)
+
+    # --- ブラケット描画 ---
+    y_max  = unsat["weighted_db"].max()
+    y_span = y_max  # bottom=0 なので span = max
+    # Sensitive を低い位置、Resistant を高い位置（行が重ならないように）
+    bracket_base = {"Sensitive": y_max * 1.06, "Resistant": y_max * 1.18}
+    h = y_max * 0.025   # ブラケットの縦線の高さ
+
+    for grp in GROUPS:
+        style = GROUP_STYLE[grp]
+        y_b = bracket_base[grp]
+        for x1, x2, p in bracket_info[grp]:
+            label = sig_label(p)
+            if not label:
+                continue
+            ax.plot([x1, x1, x2, x2], [y_b, y_b + h, y_b + h, y_b],
+                    lw=1.0, color=style["color"])
+            ax.text((x1 + x2) / 2, y_b + h * 1.3, label,
+                    ha="center", va="bottom", fontsize=9, color=style["color"])
+
+    ax.set_ylim(top=y_max * 1.40)
     plt.tight_layout()
 
     stem = os.path.join(outdir, f"{lipid_class}_rescue_unsaturation")
@@ -592,6 +653,8 @@ def plot_rescue_unsaturation(df, lipid_class, outdir):
     plt.savefig(stem + ".png", dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {stem}.png")
+
+    stats_df.to_csv(os.path.join(outdir, f"{lipid_class}_stats_unsaturation.csv"), index=False)
 
 
 # ---------- メイン ----------
