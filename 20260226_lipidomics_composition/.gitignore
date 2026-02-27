@@ -1,5 +1,5 @@
 # Excel files (large binary, not for version control)
-data/*.xlsx
+data/**/*.xlsx
 
 # Windows/Dropbox metadata
 *:Zone.Identifier

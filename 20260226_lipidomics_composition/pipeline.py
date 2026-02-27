@@ -2,15 +2,13 @@
 Lipidomics Composition Analysis Pipeline
 Usage:
     python pipeline.py SM
-    python pipeline.py PC
-    python pipeline.py PE
-    python pipeline.py PI
-    python pipeline.py PS
-    python pipeline.py Cer
+    python pipeline.py SM --experiment isotope
+    python pipeline.py PC --experiment unlabeled
 """
 
 import sys
 import os
+import argparse
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -24,12 +22,12 @@ from statsmodels.stats.multitest import multipletests
 # ---------- 設定 ----------
 TREATMENTS   = ["Ctr", "C18:0"]
 GROUPS       = ["Resistant", "Sensitive"]
-DATA_DIR     = "data"
-RESULTS_DIR  = "results"
+BASE_DATA    = "data"
+BASE_RESULTS = "results"
 
 
-def load_data(lipid_class):
-    path = os.path.join(DATA_DIR, f"{lipid_class}_pct_individual.csv")
+def load_data(lipid_class, experiment):
+    path = os.path.join(BASE_DATA, experiment, f"{lipid_class}_pct_individual.csv")
     if not os.path.exists(path):
         print(f"[ERROR] データファイルが見つかりません: {path}")
         sys.exit(1)
@@ -38,8 +36,8 @@ def load_data(lipid_class):
     return df
 
 
-def out_dir(lipid_class):
-    d = os.path.join(RESULTS_DIR, lipid_class)
+def out_dir(lipid_class, experiment):
+    d = os.path.join(BASE_RESULTS, experiment, lipid_class)
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -211,16 +209,20 @@ def plot_volcano_treatment(df, lipid_class, outdir):
 
 # ---------- メイン ----------
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python pipeline.py <LipidClass>")
-        print("Example: python pipeline.py SM")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Lipidomics composition pipeline")
+    parser.add_argument("lipid_class",
+                        help="脂質クラス名（SM, Cer, PC, PE, PI, PS）")
+    parser.add_argument("--experiment", default="unlabeled",
+                        help="実験名サブディレクトリ（デフォルト: unlabeled）")
+    args = parser.parse_args()
 
-    lipid_class = sys.argv[1]
-    print(f"\n===== {lipid_class} 解析開始 =====")
+    lipid_class = args.lipid_class
+    experiment  = args.experiment
 
-    df = load_data(lipid_class)
-    outdir = out_dir(lipid_class)
+    print(f"\n===== {lipid_class} 解析開始 [{experiment}] =====")
+
+    df = load_data(lipid_class, experiment)
+    outdir = out_dir(lipid_class, experiment)
 
     print("[1/3] Stacked bar charts ...")
     for trt in TREATMENTS:
