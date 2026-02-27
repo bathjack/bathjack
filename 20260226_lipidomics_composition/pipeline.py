@@ -8,6 +8,7 @@ Usage:
 
 import sys
 import os
+import re
 import argparse
 import pandas as pd
 import numpy as np
@@ -519,6 +520,80 @@ def plot_rescue_summary(df, lipid_class, outdir,
     print(f"  Saved: {stem}.png")
 
 
+# ---- Figure 7: Rescue unsaturation (mol%-weighted double bond count) ----
+def plot_rescue_unsaturation(df, lipid_class, outdir):
+    """
+    オレイン酸レスキューによる「不飽和度全体」の回復を可視化。
+    各サンプルの mol% 加重平均二重結合数（weighted-mean DB）を3条件で比較。
+      Ctr → C18:0 で下がる → C18:0+C18:1 で回復する、を確認する。
+    Sensitive（赤○）と Resistant（青□）を1パネルに重ねて表示。
+    """
+    RESCUE_TRT = "C18:0+C18:1"
+    TRT_ORDER  = ["Ctr", "C18:0", "C18:0+C18:1"]
+    GROUP_STYLE = {
+        "Sensitive": {"color": "#e05a5a", "marker": "o"},
+        "Resistant": {"color": "#4a90d9", "marker": "s"},
+    }
+
+    if RESCUE_TRT not in df["treatment"].unique():
+        print(f"  [{lipid_class}] '{RESCUE_TRT}' データなし — unsaturation スキップ")
+        return
+
+    # 種名から二重結合数をパース: "PI(16:0_18:1)" → 0+1=1, "PC(18:0_20:4)" → 0+4=4
+    def parse_db(name):
+        return sum(int(m) for m in re.findall(r":(\d+)", str(name)))
+
+    df = df.copy()
+    df["db"] = df["species"].map(parse_db)
+
+    # サンプルごとの mol%-加重平均二重結合数
+    df["pct_x_db"] = df["pct"] * df["db"]
+    unsat = (df.groupby(["sample", "treatment", "group"])
+               .agg(pct_sum=("pct", "sum"), pctdb_sum=("pct_x_db", "sum"))
+               .reset_index())
+    unsat["weighted_db"] = unsat["pctdb_sum"] / unsat["pct_sum"]
+    unsat = unsat[unsat["treatment"].isin(TRT_ORDER)]
+
+    rng = np.random.default_rng(42)
+    fig, ax = plt.subplots(figsize=(5, 4.5))
+
+    for grp in GROUPS:
+        style = GROUP_STYLE[grp]
+        sub   = unsat[unsat["group"] == grp]
+
+        means = []
+        for trt_i, trt in enumerate(TRT_ORDER):
+            vals = sub[sub["treatment"] == trt]["weighted_db"].values
+            if len(vals) == 0:
+                means.append(np.nan)
+                continue
+            means.append(vals.mean())
+            jitter = rng.uniform(-0.12, 0.12, len(vals))
+            ax.scatter(trt_i + jitter, vals,
+                       color=style["color"], marker=style["marker"],
+                       s=35, alpha=0.50, zorder=3, edgecolors="none")
+
+        valid = [(i, m) for i, m in enumerate(means) if not np.isnan(m)]
+        if valid:
+            xs, ys = zip(*valid)
+            ax.plot(xs, ys, "-", color=style["color"],
+                    marker=style["marker"], markersize=9,
+                    linewidth=2.2, zorder=4, label=grp)
+
+    ax.set_xticks(range(len(TRT_ORDER)))
+    ax.set_xticklabels(["Ctr", "C18:0", "C18:0\n+C18:1"], fontsize=10)
+    ax.set_ylabel("Weighted-mean double bonds per molecule", fontsize=10)
+    ax.set_title(f"{lipid_class}: Overall unsaturation\n(mol%-weighted double bond count)", fontsize=11)
+    ax.legend(fontsize=10, frameon=False)
+    plt.tight_layout()
+
+    stem = os.path.join(outdir, f"{lipid_class}_rescue_unsaturation")
+    plt.savefig(stem + ".pdf", bbox_inches="tight")
+    plt.savefig(stem + ".png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {stem}.png")
+
+
 # ---------- メイン ----------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lipidomics composition pipeline")
@@ -555,7 +630,10 @@ if __name__ == "__main__":
     print("[5/6] Rescue line chart: rescued species ...")
     plot_rescue_linechart(df, lipid_class, outdir)
 
-    print("[6/6] Rescue summary (presentation figure) ...")
+    print("[6/7] Rescue summary (presentation figure) ...")
     plot_rescue_summary(df, lipid_class, outdir)
+
+    print("[7/7] Rescue unsaturation (weighted double bond count) ...")
+    plot_rescue_unsaturation(df, lipid_class, outdir)
 
     print(f"\n===== 完了: 出力先 {outdir}/ =====\n")
