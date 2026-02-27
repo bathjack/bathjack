@@ -299,6 +299,119 @@ def plot_rescue(df, lipid_class, outdir):
     print(f"  Saved: {stem}.png")
 
 
+# ---- Figure 5: Rescue line chart (3-condition dot + line) ----
+def plot_rescue_linechart(df, lipid_class, outdir,
+                          p_thresh=0.05, top_n=8, min_ctr_pct=0.5):
+    """
+    C18:1 rescue で回復した不飽和 species の 3 条件折れ線図。
+    選択基準: Sensitive で C18:0 により有意減少 (p<p_thresh, log2FC<0) かつ
+              C18:0+C18:1 で回復 (rescue_delta > 0) かつ Ctr 平均 >= min_ctr_pct%。
+    rescue_delta（回復量）の大きい順に top_n 種を表示。
+    """
+    RESCUE_TRT = "C18:0+C18:1"
+    TRT_ORDER  = ["Ctr", "C18:0", "C18:0+C18:1"]
+    TRT_COLORS = {"Ctr": "#888888", "C18:0": "#e07030", "C18:0+C18:1": "#5aaa60"}
+
+    if RESCUE_TRT not in df["treatment"].unique():
+        return
+
+    species_list = sorted(df["species"].unique())
+    records = []
+    for grp in GROUPS:
+        sub = df[df["group"] == grp]
+        for sp in species_list:
+            ctr = sub[(sub["treatment"] == "Ctr")      & (sub["species"] == sp)]["pct"].values
+            c18 = sub[(sub["treatment"] == "C18:0")    & (sub["species"] == sp)]["pct"].values
+            rsc = sub[(sub["treatment"] == RESCUE_TRT) & (sub["species"] == sp)]["pct"].values
+            if len(ctr) < 3 or len(c18) < 3 or len(rsc) < 3:
+                continue
+            _, p = mannwhitneyu(ctr, c18, alternative="two-sided")
+            fc_c18 = np.log2((c18.mean() + 1e-6) / (ctr.mean() + 1e-6))
+            fc_rsc = np.log2((rsc.mean() + 1e-6) / (ctr.mean() + 1e-6))
+            records.append({
+                "group": grp, "species": sp,
+                "p_C18": p, "log2FC_C18": fc_c18, "log2FC_rescue": fc_rsc,
+                "rescue_delta": fc_rsc - fc_c18,
+                "mean_Ctr": ctr.mean(),
+            })
+
+    if not records:
+        print(f"  [{lipid_class}] rescue linechart: データ不足 — スキップ")
+        return
+
+    result = pd.DataFrame(records)
+
+    # Sensitive で有意減少 & rescue された species を rescue_delta 降順で選出
+    # min_ctr_pct 以上の mol% を持つ species のみ対象
+    cand = result[
+        (result["group"] == "Sensitive") &
+        (result["p_C18"] < p_thresh) &
+        (result["log2FC_C18"] < 0) &
+        (result["rescue_delta"] > 0) &
+        (result["mean_Ctr"] >= min_ctr_pct)
+    ]
+    if len(cand) == 0:
+        print(f"  [{lipid_class}] rescue linechart: 該当 species なし (Ctr≥{min_ctr_pct}%) — スキップ")
+        return
+
+    selected = cand.nlargest(top_n, "rescue_delta")["species"].tolist()
+    n_sp = len(selected)
+
+    rng = np.random.default_rng(42)   # jitter の再現性
+    fig, axes = plt.subplots(n_sp, 2,
+                             figsize=(7.5, 2.0 * n_sp),
+                             squeeze=False)
+
+    for row_i, sp in enumerate(selected):
+        for col_i, grp in enumerate(GROUPS):
+            ax = axes[row_i][col_i]
+            sub = df[(df["species"] == sp) & (df["group"] == grp)]
+
+            means = []
+            for trt_i, trt in enumerate(TRT_ORDER):
+                vals = sub[sub["treatment"] == trt]["pct"].values
+                if len(vals) == 0:
+                    means.append(np.nan)
+                    continue
+                means.append(vals.mean())
+                jitter = rng.uniform(-0.15, 0.15, len(vals))
+                ax.scatter(trt_i + jitter, vals,
+                           color=TRT_COLORS[trt], s=22, alpha=0.65,
+                           zorder=3, edgecolors="none")
+
+            # 平均連結折れ線
+            valid = [(i, m) for i, m in enumerate(means) if not np.isnan(m)]
+            if valid:
+                xs, ys = zip(*valid)
+                ax.plot(xs, ys, "o-", color="#333333",
+                        markersize=6, linewidth=1.5, zorder=4)
+
+            ax.set_xticks(range(len(TRT_ORDER)))
+            ax.set_xticklabels(TRT_ORDER, rotation=25, ha="right", fontsize=8)
+            ax.set_ylim(bottom=0)
+            ax.tick_params(axis="y", labelsize=7)
+
+            if col_i == 0:
+                ax.set_ylabel(f"{sp}\n(mol%)", fontsize=7.5)
+            if row_i == 0:
+                ax.set_title(grp, fontsize=10, fontweight="bold")
+
+    handles = [mpatches.Patch(color=TRT_COLORS[t], label=t) for t in TRT_ORDER]
+    fig.legend(handles=handles, loc="upper right", fontsize=8, frameon=False)
+    fig.suptitle(
+        f"{lipid_class}: C18:0↓ species rescued by C18:1\n"
+        f"(top {n_sp} by rescue magnitude, Sensitive p<{p_thresh})",
+        fontsize=11
+    )
+    plt.tight_layout()
+
+    stem = os.path.join(outdir, f"{lipid_class}_rescue_linechart")
+    plt.savefig(stem + ".pdf", bbox_inches="tight")
+    plt.savefig(stem + ".png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {stem}.png")
+
+
 # ---------- メイン ----------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lipidomics composition pipeline")
@@ -329,7 +442,10 @@ if __name__ == "__main__":
     print("[3/3] Volcano: treatment effect (Ctr vs C18:0) ...")
     plot_volcano_treatment(df, lipid_class, outdir)
 
-    print("[4/4] Rescue plot: C18:1 protection ...")
+    print("[4/5] Rescue scatter: C18:1 protection ...")
     plot_rescue(df, lipid_class, outdir)
+
+    print("[5/5] Rescue line chart: rescued species ...")
+    plot_rescue_linechart(df, lipid_class, outdir)
 
     print(f"\n===== 完了: 出力先 {outdir}/ =====\n")
