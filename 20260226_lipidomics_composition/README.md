@@ -3,37 +3,59 @@
 ## ディレクトリ構造
 
 ```
-claudecode_test/
+20260226_lipidomics_composition/
 ├── README.md
-├── pipeline.py          # 解析パイプライン本体
+├── preprocess.py        # Step 1: Excel → per-class CSV
+├── pipeline.py          # Step 2: コンポジション解析・図の生成
 ├── stopwatch.html
-├── data/                # 入力データ（CSVのみ管理、xlsxはgitignore）
-│   ├── SM_pct_individual.csv
-│   └── SM_pct_summary.csv
-└── results/             # 解析出力（クラスごとにサブフォルダ）
-    └── SM/
-        ├── *_composition_*.png   # Stacked bar charts
-        ├── *_volcano_*.png       # Volcano plots
-        └── *_stats_*.csv         # 統計検定結果
+├── data/
+│   ├── sample_metadata.csv        # サンプル情報（実験ごとに差し替え）
+│   ├── Summary_edit_20250226.xlsx # 元データ（gitignore）
+│   ├── SM_pct_individual.csv      # pipeline.py の入力
+│   ├── Cer_pct_individual.csv
+│   ├── PC_pct_individual.csv
+│   └── ...
+└── results/                       # 解析出力（クラスごとにサブフォルダ）
+    ├── SM/
+    ├── Cer/
+    └── ...
 ```
 
-## 使い方
+## ワークフロー
 
-### 既存クラスを再解析する
+### Step 1: ExcelからCSVを生成（実験ごとに1回）
+
+```bash
+# 全クラスを一括処理
+python preprocess.py data/Summary_edit_20250226.xlsx
+
+# 特定クラスのみ
+python preprocess.py data/Summary_edit_20250226.xlsx SM Cer PC PE PI PS
+
+# シート名が異なる場合
+python preprocess.py data/NewExperiment.xlsx --sheet シート名
+```
+
+**前提ファイル：** `data/sample_metadata.csv`
+
+| 列名 | 内容 | 例 |
+|------|------|----|
+| sample | サンプル列名 | Area[s11-1] |
+| cellline | 細胞株名 | A549 |
+| sensitivity | 感受性グループ | Res / C18 / C18-C16 |
+| group | Resistant / Sensitive | Resistant |
+| treatment | 処理条件 | Ctr / C18:0 / C18:0+C18:1 |
+
+> 新しい実験では `sample_metadata.csv` を差し替えるだけでOK
+
+### Step 2: コンポジション解析の実行
+
 ```bash
 python pipeline.py SM
+python pipeline.py Cer
+python pipeline.py PC   # PC, PE, PI, PS も同様
 ```
 
-### 新しいクラスを解析する
-1. `data/` に `{クラス名}_pct_individual.csv` を置く
-2. 以下を実行する：
-```bash
-python pipeline.py PC
-python pipeline.py PE
-python pipeline.py PI
-python pipeline.py PS
-python pipeline.py Cer
-```
 → `results/{クラス名}/` に figure (PNG) と stats (CSV) が自動生成される
 
 ## 解析内容
