@@ -110,12 +110,13 @@ def plot_volcano_res_vs_sen(df, lipid_class, outdir):
         ax.axhline(-np.log10(0.05), color="black", linestyle="--", linewidth=0.8, alpha=0.6)
         ax.axvline(0, color="gray", linestyle=":", linewidth=0.8)
 
-        for _, row in sub[sub["p"] < 0.05].iterrows():
+        label_df = sub[sub["p"] < 0.05].nsmallest(10, "p")
+        for _, row in label_df.iterrows():
             ax.text(row["log2FC"], row["-log10p"] + 0.04, row["species"],
                     fontsize=6.5, ha="center", va="bottom")
 
         sig = sub[sub.get("q", pd.Series([1]*len(sub))) < 0.2]["species"].tolist()
-        note = "FDR q<0.2: " + ", ".join(sig) if sig else "no significance after FDR"
+        note = f"FDR q<0.2: {len(sig)} species" if sig else "no significance after FDR"
         ax.set_xlabel("log2 FC (Resistant / Sensitive)", fontsize=11)
         ax.set_ylabel("-log10(p-value)", fontsize=11)
         ax.set_title(f"{lipid_class}: Resistant vs Sensitive — {trt}\n({note})", fontsize=10)
@@ -168,12 +169,13 @@ def plot_volcano_treatment(df, lipid_class, outdir):
         ax.axhline(-np.log10(0.05), color="black", linestyle="--", linewidth=0.8, alpha=0.6)
         ax.axvline(0, color="gray", linestyle=":", linewidth=0.8)
 
-        for _, row in sub[sub["p"] < 0.05].iterrows():
+        label_df = sub[sub["p"] < 0.05].nsmallest(10, "p")
+        for _, row in label_df.iterrows():
             ax.text(row["log2FC"], row["-log10p"] + 0.04, row["species"],
                     fontsize=6.5, ha="center", va="bottom")
 
         sig = sub[sub.get("q", pd.Series([1]*len(sub))) < 0.2]["species"].tolist()
-        note = "FDR q<0.2: " + ", ".join(sig) if sig else "no significance after FDR"
+        note = f"FDR q<0.2: {len(sig)} species" if sig else "no significance after FDR"
         ax.set_xlabel("log2 FC (C18:0 / Ctr)", fontsize=11)
         ax.set_ylabel("-log10(p-value)", fontsize=11)
         ax.set_title(f"{lipid_class}: {grp} — Ctr vs C18:0\n({note})", fontsize=10)
