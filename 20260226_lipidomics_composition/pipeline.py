@@ -45,19 +45,34 @@ def out_dir(lipid_class):
 
 
 # ---- Figure 1: Stacked bar (Resistant vs Sensitive) ----
+OTHERS_THRESHOLD = 1.0   # 全グループの平均 mol% がこの値未満の種を "Others" にまとめる
+
 def plot_stacked_bar(df, lipid_class, treatment, outdir):
     sub = df[df["treatment"] == treatment]
     summary = sub.groupby(["group", "species"])["pct"].mean().reset_index()
-    pivot = summary.pivot(index="species", columns="group", values="pct")
+    pivot = summary.pivot(index="species", columns="group", values="pct").fillna(0)
     pivot = pivot.sort_values("Resistant", ascending=False)
 
-    n = len(pivot)
-    colors = cm.tab20(np.linspace(0, 1, n))
+    # 閾値未満の種を Others にまとめる
+    max_pct = pivot.max(axis=1)
+    major = pivot[max_pct >= OTHERS_THRESHOLD]
+    minor = pivot[max_pct <  OTHERS_THRESHOLD]
+    if len(minor) > 0:
+        others_row = minor.sum(axis=0).rename("Others")
+        pivot_plot = pd.concat([major, others_row.to_frame().T])
+    else:
+        pivot_plot = major
+
+    n = len(pivot_plot)
+    # Others はグレー、それ以外は tab20
+    colors = list(cm.tab20(np.linspace(0, 1, n - (1 if len(minor) > 0 else 0))))
+    if len(minor) > 0:
+        colors.append((0.75, 0.75, 0.75, 1.0))   # gray for Others
 
     fig, ax = plt.subplots(figsize=(6, 6))
     bottoms = np.zeros(2)
-    for i, sp in enumerate(pivot.index):
-        vals = [pivot.loc[sp, g] for g in GROUPS]
+    for i, sp in enumerate(pivot_plot.index):
+        vals = [pivot_plot.loc[sp, g] for g in GROUPS]
         ax.bar(GROUPS, vals, bottom=bottoms, color=colors[i], label=sp, width=0.5)
         bottoms += np.array(vals)
 
@@ -65,7 +80,7 @@ def plot_stacked_bar(df, lipid_class, treatment, outdir):
     ax.set_title(f"{lipid_class} Species Composition\n(Resistant vs Sensitive, {treatment})", fontsize=12)
     ax.set_ylim(0, 105)
     ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8,
-              frameon=False, title="Species", title_fontsize=9)
+              frameon=False, title=f"Species (≥{OTHERS_THRESHOLD}%)", title_fontsize=9)
     plt.tight_layout()
 
     tag = treatment.replace(":", "").replace("+", "_")
